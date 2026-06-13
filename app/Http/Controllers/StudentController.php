@@ -2458,6 +2458,71 @@ class StudentController extends Controller
 
         // if inactive or graduated, do nothing and return
         if ($class->levelid <= 0) {
+            // check whether the parent has other children in this school
+            $activeStudentsByOrg = DB::table("users as u")
+                ->join("organization_user as ou", "ou.user_id", "=", "u.id")
+                ->join("organization_user_student as ous", "ous.organization_user_id", "=", "ou.id")
+                ->join("students as s", "s.id", "=", "ous.student_id")
+                ->join("class_student as cs", "cs.student_id", "=", "s.id")
+                ->join("class_organization as co", "co.id", "=", "cs.organclass_id")
+                ->join("classes as c", "c.id", "=", "co.class_id")
+                ->where("u.telno", "=", $student->parentTelno)  // get the current student's parent
+                ->where("ou.organization_id", "=", $co->organization_id)  // get the parent's children from this org
+                ->where("cs.status", "=", 1)  // get the children's current active class
+                ->where("c.levelid", ">", 0)  // check if the current class is not inactive class or graduated class
+                ->get()
+                ->count();
+
+
+            // if not, remove the fees assigned for the currently active fee (kategori A)
+            if ($activeStudentsByOrg == 0) {
+                // get the organization_user id
+                $organizationUserId = DB::table("organization_user as ou")
+                    ->join("users as u", "u.id", "=", "ou.user_id")
+                    ->where("organization_id", "=", $co->organization_id)
+                    ->where("u.telno", "=", $student->parentTelno)
+                    ->where("ou.status", "=", 1)
+                    ->where("ou.role_id", "=", 6)
+                    ->select("ou.id as id")
+                    ->first()
+                    ->id;
+
+                // get the fees_new_organization_user where the fee is active and linked to the current organization_user
+                $feesNewOrganizationUserIds = DB::table("fees_new_organization_user as fou")
+                    ->join("fees_new as fn", "fn.id", "=", "fou.fees_new_id")
+                    ->where("fn.status", "=", 1)
+                    ->where("fou.organization_user_id", "=", $organizationUserId)
+                    ->where("fou.status", "=", "Debt")
+                    ->select("fou.id as id")
+                    ->distinct()
+                    ->get()
+                    ->pluck("id")
+                    ->toArray();
+
+
+                // delete the fees
+                DB::table("fees_new_organization_user")
+                    ->whereIn("id", $feesNewOrganizationUserIds)
+                    ->delete();
+            }
+
+            // get the student fees new id for the attached active fee
+            $studentFeesNewIds = DB::table("student_fees_new as sfn")
+                ->join("fees_new as fn", "fn.id", "=", "sfn.fees_id")
+                ->whereIn("sfn.class_student_id", $class_student)
+                ->where("sfn.status", "=", "Debt")
+                ->where("fn.status", "=", 1)
+                ->select("sfn.id")
+                ->distinct()
+                ->get()
+                ->pluck("id")
+                ->toArray();
+
+            // remove the fees assigned for the currently active fee (kategori B & C)
+            DB::table("student_fees_new")
+                ->whereIn("id", $studentFeesNewIds)
+                ->delete();
+
             return;
         }
 
